@@ -28,15 +28,15 @@ class DistriHunyuanDiT2DModel(BaseModule):
         # logger.info(f"{len{self.module.transformer_blocks}}")
 
         if distri_config.attn_num is not None:
-            assert sum(distri_config.attn_num) == len(self.module.transformer_blocks)
+            assert sum(distri_config.attn_num) == len(self.module.blocks)
             assert len(distri_config.attn_num) == distri_config.world_size
 
             if current_rank == 0:
-                self.module.transformer_blocks = self.module.transformer_blocks[
+                self.module.blocks = self.module.blocks[
                     : distri_config.attn_num[0]
                 ]
             else:
-                self.module.transformer_blocks = self.module.transformer_blocks[
+                self.module.blocks = self.module.blocks[
                     sum(distri_config.attn_num[: current_rank - 1]) : sum(
                         distri_config.attn_num[:current_rank]
                     )
@@ -44,13 +44,13 @@ class DistriHunyuanDiT2DModel(BaseModule):
         else:
 
             block_len = (
-                len(self.module.transformer_blocks) + distri_config.world_size - 1
+                len(self.module.blocks) + distri_config.world_size - 1
             ) // distri_config.world_size
             start_idx = block_len * current_rank
             end_idx = min(
-                block_len * (current_rank + 1), len(self.module.transformer_blocks)
+                block_len * (current_rank + 1), len(self.module.blocks)
             )
-            self.module.transformer_blocks = self.module.transformer_blocks[
+            self.module.blocks = self.module.blocks[
                 start_idx:end_idx
             ]
 
@@ -191,7 +191,7 @@ class DistriHunyuanDiT2DModel(BaseModule):
                 batch_size, -1, hidden_states.shape[-1]
             )
 
-        for block in module.transformer_blocks:
+        for block in module.blocks:
             hidden_states = block(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -206,7 +206,7 @@ class DistriHunyuanDiT2DModel(BaseModule):
         if distri_config.rank == 0:
             if module.is_input_patches:
                 if module.config.norm_type != "ada_norm_single":
-                    conditioning = module.transformer_blocks[0].norm1.emb(
+                    conditioning = module.blocks[0].norm1.emb(
                         timestep, class_labels, hidden_dtype=hidden_states.dtype
                     )
                     shift, scale = module.proj_out_1(F.silu(conditioning)).chunk(
