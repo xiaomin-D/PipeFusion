@@ -23,7 +23,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_id",
-        default="Tencent-Hunyuan/HunyuanDiT",
+        default="Tencent-Hunyuan/HunyuanDiT-Diffusers",
         type=str,
         help="Path to the pretrained model.",
     )
