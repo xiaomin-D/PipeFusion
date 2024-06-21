@@ -11,6 +11,7 @@ from pipefuser.modules.base_module import BaseModule
 from pipefuser.modules.pip import (
     DistriSelfAttentionPiP,
     DistriTransformer2DModel,
+    DistriHunyuanDiT2DModel,
     DistriConv2dPiP,
     DistriPatchEmbed,
 )
@@ -27,7 +28,7 @@ from typing import Optional, Dict, Any
 class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
     def __init__(self, model: HunyuanDiT2DModel, distri_config: DistriConfig):
         assert isinstance(model, HunyuanDiT2DModel)
-        model = DistriTransformer2DModel(model, distri_config)
+        model = DistriHunyuanDiT2DModel(model, distri_config)
         for name, module in model.named_modules():
             if isinstance(module, BaseModule):
                 continue
