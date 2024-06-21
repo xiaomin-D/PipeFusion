@@ -12,7 +12,7 @@ if __name__ == "__main__":
         author="Jiannan Wang, Jiarui Fang, Aoyu Li, Pengcheng Yang",
         author_email="muyangli@mit.edu",
         packages=find_packages(),
-        install_requires=["torch>=2.2", "diffusers==0.27.2", "transformers", "tqdm"],
+        install_requires=["torch", "diffusers", "transformers", "tqdm"],
         url="https://github.com/PipeFusion/PipeFusion.",
         description="DistriFusion: Distributed Parallel Inference for High-Resolution Diffusion Models",
         long_description=long_description,
