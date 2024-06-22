@@ -81,7 +81,7 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
         #     and text_embedding_mask is None
         #     # and encoder_attention_mask is None
         # )
-        output = self.transformer(
+        output = self.model(
                 hidden_states,
                 timestep=timestep,
                 encoder_hidden_states=encoder_hidden_states,
