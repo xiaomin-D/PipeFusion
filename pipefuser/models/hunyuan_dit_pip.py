@@ -76,7 +76,7 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
         # b, c, h, w = hidden_states.shape
         # b, c, h, w = sample.shape
         assert (
-            hidden_states is not None
+            hidden_states is  None
             and encoder_hidden_states is None
             and text_embedding_mask is None
             # and encoder_attention_mask is None
