@@ -75,12 +75,12 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
         # hidden_states.shape = [2, 4, 32, 32]
         # b, c, h, w = hidden_states.shape
         # b, c, h, w = sample.shape
-        assert (
-            hidden_states is  None
-            and encoder_hidden_states is None
-            and text_embedding_mask is None
-            # and encoder_attention_mask is None
-        )
+        # assert (
+        #     hidden_states is  None
+        #     and encoder_hidden_states is None
+        #     and text_embedding_mask is None
+        #     # and encoder_attention_mask is None
+        # )
         output = self.transformer(
                 hidden_states,
                 timestep=timestep,
