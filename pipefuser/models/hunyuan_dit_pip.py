@@ -59,16 +59,15 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        latent_model_input: torch.Tensor,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         timestep: Optional[torch.LongTensor] = None,
-        added_cond_kwargs: Dict[str, torch.Tensor] = None,
-        class_labels: Optional[torch.LongTensor] = None,
-        cross_attention_kwargs: Dict[str, Any] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        return_dict: bool = True,
-        record: bool = False,
+        prompt_attention_mask: Optional[torch.Tensor]=None,
+        prompt_embeds_2: Optional[torch.Tensor]=None,
+        prompt_attention_mask_2: Optional[torch.Tensor]=None,
+        add_time_ids: Optional[torch.Tensor]=None,
+        style: Optional[torch.Tensor]=None,
+        image_rotary_emb: Optional[torch.Tensor]=None,
     ):
         distri_config = self.distri_config
 
@@ -76,23 +75,24 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
         # b, c, h, w = hidden_states.shape
         # b, c, h, w = sample.shape
         assert (
-            hidden_states is not None
-            and cross_attention_kwargs is None
-            and attention_mask is None
+            latent_model_input is not None
+            and encoder_hidden_states is None
+            and prompt_attention_mask is None
             # and encoder_attention_mask is None
         )
-        output = self.model(
-            hidden_states=hidden_states,
-            encoder_hidden_states=encoder_hidden_states,
-            timestep=timestep,
-            added_cond_kwargs=added_cond_kwargs,
-            class_labels=class_labels,
-            cross_attention_kwargs=cross_attention_kwargs,
-            attention_mask=attention_mask,
-            encoder_attention_mask=encoder_attention_mask,
-            return_dict=False,
-        )[0]
-
+        output = self.transformer(
+                latent_model_input,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                text_embedding_mask=prompt_attention_mask,
+                encoder_hidden_states_t5=prompt_embeds_2,
+                text_embedding_mask_t5=prompt_attention_mask_2,
+                image_meta_size=add_time_ids,
+                style=style,
+                image_rotary_emb=image_rotary_emb,
+                return_dict=False,
+                )[0]
+        
         if return_dict:
             output = Transformer2DModelOutput(sample=output)
         else:
