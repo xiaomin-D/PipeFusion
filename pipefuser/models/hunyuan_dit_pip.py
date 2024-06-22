@@ -59,15 +59,16 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
 
     def forward(
         self,
-        latent_model_input: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        timestep: Optional[torch.LongTensor] = None,
-        prompt_attention_mask: Optional[torch.Tensor]=None,
-        prompt_embeds_2: Optional[torch.Tensor]=None,
-        prompt_attention_mask_2: Optional[torch.Tensor]=None,
-        add_time_ids: Optional[torch.Tensor]=None,
-        style: Optional[torch.Tensor]=None,
-        image_rotary_emb: Optional[torch.Tensor]=None,
+        hidden_states,
+        timestep,
+        encoder_hidden_states=None,
+        text_embedding_mask=None,
+        encoder_hidden_states_t5=None,
+        text_embedding_mask_t5=None,
+        image_meta_size=None,
+        style=None,
+        image_rotary_emb=None,
+        return_dict=True,
     ):
         distri_config = self.distri_config
 
@@ -75,19 +76,19 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
         # b, c, h, w = hidden_states.shape
         # b, c, h, w = sample.shape
         assert (
-            latent_model_input is not None
+            hidden_states is not None
             and encoder_hidden_states is None
-            and prompt_attention_mask is None
+            and text_embedding_mask is None
             # and encoder_attention_mask is None
         )
         output = self.transformer(
-                latent_model_input,
+                hidden_states,
                 timestep=timestep,
                 encoder_hidden_states=encoder_hidden_states,
-                text_embedding_mask=prompt_attention_mask,
-                encoder_hidden_states_t5=prompt_embeds_2,
-                text_embedding_mask_t5=prompt_attention_mask_2,
-                image_meta_size=add_time_ids,
+                text_embedding_mask=text_embedding_mask,
+                encoder_hidden_states_t5=encoder_hidden_states_t5,
+                text_embedding_mask_t5=text_embedding_mask_t5,
+                image_meta_size=image_meta_size,
                 style=style,
                 image_rotary_emb=image_rotary_emb,
                 return_dict=False,
