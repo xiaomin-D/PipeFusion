@@ -120,8 +120,8 @@ class DistriHunyuanDiT2DModel(BaseModule):
             else:
                 height //= distri_config.pp_num_patch
 
-            if distri_config.rank == 1:
-                hidden_states = module.pos_embed(hidden_states)
+        if distri_config.rank == 1:
+            hidden_states = module.pos_embed(hidden_states)
                 
 
 
