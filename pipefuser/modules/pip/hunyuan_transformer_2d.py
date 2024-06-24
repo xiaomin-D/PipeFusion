@@ -165,22 +165,26 @@ class DistriHunyuanDiT2DModel(BaseModule):
                 skips.append(hidden_states)
 
         # final layer
-        hidden_states = module.norm_out(hidden_states, temb.to(torch.float32))
-        hidden_states = module.proj_out(hidden_states)
-        # (N, L, patch_size ** 2 * out_channels)
+        if distri_config.rank == 0:
+            hidden_states = module.norm_out(hidden_states, temb.to(torch.float32))
+            hidden_states = module.proj_out(hidden_states)
+            # (N, L, patch_size ** 2 * out_channels)
 
-        # unpatchify: (N, out_channels, H, W)
-        patch_size = module.pos_embed.patch_size
-        height = height // patch_size
-        width = width // patch_size
+            # unpatchify: (N, out_channels, H, W)
+            patch_size = module.pos_embed.patch_size
+            height = height // patch_size
+            width = width // patch_size
 
-        hidden_states = hidden_states.reshape(
-            shape=(hidden_states.shape[0], height, width, patch_size, patch_size, module.out_channels)
-        )
-        hidden_states = torch.einsum("nhwpqc->nchpwq", hidden_states)
-        output = hidden_states.reshape(
-            shape=(hidden_states.shape[0], module.out_channels, height * patch_size, width * patch_size)
-        )
+            hidden_states = hidden_states.reshape(
+                shape=(hidden_states.shape[0], height, width, patch_size, patch_size, module.out_channels)
+            )
+            hidden_states = torch.einsum("nhwpqc->nchpwq", hidden_states)
+            output = hidden_states.reshape(
+                shape=(hidden_states.shape[0], module.out_channels, height * patch_size, width * patch_size)
+            )
+        else:
+            output = hidden_states
+        
         if (
             distri_config.mode == "full_sync"
             or self.counter <= distri_config.warmup_steps
