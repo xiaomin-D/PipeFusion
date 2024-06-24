@@ -348,6 +348,7 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
                     latents = self.comm_manager.get_data()
                 # 直接transfomer是否可行？ 
                 # 是不是需要处理一下维度？
+                t = t.unsqueeze(0).to(dtype=torch.float16)
                 latents = self.transformer(
                     latents,
                     timestep=t,
