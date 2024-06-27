@@ -15,7 +15,7 @@ from pipefuser.schedulers.pip import (
     DPMSolverMultistepSchedulerPiP,
     DDIMSchedulerPiP,
     FlowMatchEulerDiscreteSchedulerPiP,
-    DPMSolverMultistepSchedulerPiP,
+    DDPMSchedulerPiP,
 )
 from pipefuser.models import (
     NaivePatchDiT,
@@ -42,7 +42,7 @@ class DistriHunyuanDiTPipeline:
         assert module_config.split_batch == False
 
         self.distri_config = module_config
-        
+        self.use_resolution_binning = True
         self.static_inputs = None
 
         self.prepare()
@@ -93,7 +93,7 @@ class DistriHunyuanDiTPipeline:
                 )
             scheduler.init(distri_config)
 
-        if distri_config.parallelism == "pipeline":
+        if distri_config.parallelism == "pipefusion":
             pipeline = DistriHunyuanDiTPiP.from_pretrained(
                 pretrained_model_name_or_path,
                 torch_dtype=torch_dtype,
@@ -103,7 +103,7 @@ class DistriHunyuanDiTPipeline:
             ).to(device)
             pipeline.init(distri_config)
         else:
-            pipeline = PixArtAlphaPipeline.from_pretrained(
+            pipeline = DistriHunyuanDiTPipeline.from_pretrained(
                 pretrained_model_name_or_path,
                 torch_dtype=torch_dtype,
                 transformer=transformer,
@@ -133,7 +133,7 @@ class DistriHunyuanDiTPipeline:
             height=config.height,
             width=config.width,
             prompt=prompt,
-            use_resolution_binning=config.use_resolution_binning,
+            use_resolution_binning=self.use_resolution_binning,
             num_inference_steps=num_inference_steps,
             *args,
             **kwargs,
@@ -155,23 +155,27 @@ class DistriHunyuanDiTPipeline:
         device = distri_config.device
 
         batch_size = distri_config.batch_size or 1
+        prompt = [""] * batch_size if batch_size > 1 else ""
         num_images_per_prompt = 1
 
-        if distri_config.parallelism == "pipeline":
+        if distri_config.parallelism == "pipefusion":
             comm_manager = PipelineParallelismCommManager(distri_config)
             self.pipeline.set_comm_manager(comm_manager)
             self.pipeline(
                 height=distri_config.height,
                 width=distri_config.width,
                 prompt=prompt,
-                use_resolution_binning=distri_config.use_resolution_binning,
+                use_resolution_binning=self.use_resolution_binning,
                 num_inference_steps=distri_config.warmup_steps + 2,
                 output_type="latent",
             )
 
         else:
+            raise NotImplementedError(
+                "HunyuanDiT doesn't support other parallelism methods now"
+            )
             # Resolution binning
-            if distri_config.use_resolution_binning:
+            if self.use_resolution_binning:
                 if pipeline.transformer.config.sample_size == 128:
                     aspect_ratio_bin = ASPECT_RATIO_1024_BIN
                 elif pipeline.transformer.config.sample_size == 64:
