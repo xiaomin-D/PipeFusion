@@ -165,7 +165,7 @@ class DistriHunyuanDiT2DModel(BaseModule):
             # (N, L, patch_size ** 2 * out_channels)
 
             # unpatchify: (N, out_channels, H, W)
-            patch_size = module.pos_embed.patch_size
+            patch_size = module.config.patch_size
             height = height // patch_size
             width = width // patch_size
 
