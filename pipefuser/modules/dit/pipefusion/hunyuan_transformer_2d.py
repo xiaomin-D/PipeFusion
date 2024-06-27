@@ -106,11 +106,11 @@ class DistriHunyuanDiT2DModel(BaseModule):
             distri_config.mode == "full_sync"
             or self.counter <= distri_config.warmup_steps
         )
-        if joint_attention_kwargs is not None:
-            joint_attention_kwargs = joint_attention_kwargs.copy()
-            lora_scale = joint_attention_kwargs.pop("scale", 1.0)
-        else:
-            lora_scale = 1.0
+        # if joint_attention_kwargs is not None:
+        #     joint_attention_kwargs = joint_attention_kwargs.copy()
+        #     lora_scale = joint_attention_kwargs.pop("scale", 1.0)
+        # else:
+        #     lora_scale = 1.0
         
 
         if distri_config.rank == 1:
