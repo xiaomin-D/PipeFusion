@@ -1,9 +1,8 @@
 # from diffusers.models.attention_processor import Attention
-from pipefuser.models.diffusers import Attention
-
+from diffusers.models.attention import Attention
 from diffusers.models.transformers.transformer_2d import Transformer2DModelOutput
 from diffusers.models.embeddings import PatchEmbed
-from pipefuser.models.diffusers import Transformer2DModel,HunyuanDiT2DModel
+from diffusers.models.transformers.hunyuan_transformer_2d import HunyuanDiT2DModel
 from torch import distributed as dist, nn
 import torch
 
