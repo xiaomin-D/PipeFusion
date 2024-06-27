@@ -102,33 +102,27 @@ class DistriHunyuanDiT2DModel(BaseModule):
         """
         module = self.module
         distri_config = self.distri_config
+        is_warmup = (
+            distri_config.mode == "full_sync"
+            or self.counter <= distri_config.warmup_steps
+        )
+        if joint_attention_kwargs is not None:
+            joint_attention_kwargs = joint_attention_kwargs.copy()
+            lora_scale = joint_attention_kwargs.pop("scale", 1.0)
+        else:
+            lora_scale = 1.0
         
-        if distri_config.rank == 0:
-            # height, width = (
-            #     hidden_states.shape[-2] // module.patch_size,
-            #     hidden_states.shape[-1] // module.patch_size,
-            # )
-            height, width = (
-                distri_config.height // module.patch_size // 8,
-                distri_config.width // module.patch_size // 8,
-            )
-            if (
-                self.counter <= distri_config.warmup_steps
-                or distri_config.mode == "full_sync"
-            ):
-                pass
-            else:
-                height //= distri_config.pp_num_patch
 
         if distri_config.rank == 1:
-            hidden_states = module.pos_embed(hidden_states)
-                
-
-
+            hidden_states = module.pos_embed(
+                hidden_states
+            )  # takes care of adding positional embeddings too.
+            encoder_hidden_states = module.context_embedder(encoder_hidden_states)
+  
         temb = module.time_extra_emb(
             timestep, encoder_hidden_states_t5, image_meta_size, style, hidden_dtype=timestep.dtype
         )  # [B, D]
-
+        
         # text projection
         batch_size, sequence_length, _ = encoder_hidden_states_t5.shape
         encoder_hidden_states_t5 = module.text_embedder(
@@ -183,18 +177,16 @@ class DistriHunyuanDiT2DModel(BaseModule):
                 shape=(hidden_states.shape[0], module.out_channels, height * patch_size, width * patch_size)
             )
         else:
-            output = hidden_states
+            output = hidden_states, encoder_hidden_states
         
-        if (
-            distri_config.mode == "full_sync"
-            or self.counter <= distri_config.warmup_steps
-        ):
+        if is_warmup:
             self.counter += 1
         else:
             self.batch_idx += 1
             if self.batch_idx == distri_config.pp_num_patch:
                 self.counter += 1
                 self.batch_idx = 0
+
         if not return_dict:
             return (output,)
         return Transformer2DModelOutput(sample=output)

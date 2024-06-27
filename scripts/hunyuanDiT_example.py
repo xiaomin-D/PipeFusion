@@ -126,29 +126,15 @@ def main():
     distri_config = DistriConfig(
         height=args.height,
         width=args.width,
-        warmup_steps=4,
-        do_classifier_free_guidance=True,
+        warmup_steps=args.pipefusion_warmup_step,
         split_batch=False,
         parallelism=args.parallelism,
         mode=args.sync_mode,
         pp_num_patch=args.pp_num_patch,
-        use_seq_parallel_attn=args.use_seq_parallel_attn,
-        use_resolution_binning=not args.no_use_resolution_binning,
-        use_cuda_graph=args.use_cuda_graph,
         attn_num=args.attn_num,
         scheduler=args.scheduler,
     )
 
-    if distri_config.use_seq_parallel_attn and HAS_LONG_CTX_ATTN:
-        ulysses_degree = args.ulysses_degree
-        ring_degree = distri_config.world_size // ulysses_degree
-        set_seq_parallel_pg(
-            ulysses_degree,
-            ring_degree,
-            distri_config.rank,
-            distri_config.world_size,
-            use_ulysses_low=args.use_use_ulysses_low,
-        )
 
     pipeline = DistriHunyuanDiTPipeline.from_pretrained(
         distri_config=distri_config,
@@ -157,9 +143,6 @@ def main():
         # use_safetensors=True,
     )
 
-    if args.output_type == "pil":
-        print("Patching Conv2d")
-        PatchConv2d(1024)(pipeline.pipeline)
     pipeline.set_progress_bar_config(disable=distri_config.rank != 0)
     # warmup
     output = pipeline(
@@ -169,8 +152,8 @@ def main():
     )
 
     torch.cuda.reset_peak_memory_stats()
-
-    case_name = f"{args.parallelism}_hw_{args.height}_sync_{args.sync_mode}_sp_{args.use_seq_parallel_attn}_u{args.ulysses_degree}_w{distri_config.world_size}_mb{args.pp_num_patch if args.parallelism=='pipeline' else 0}"
+    
+    case_name = f"{args.parallelism}_hw_{args.height}_sync_{args.sync_mode}_sp_{args.use_seq_parallel_attn}_u{args.ulysses_degree}_w{distri_config.world_size}_mb{args.pp_num_patch if args.parallelism=='pipefusion' else 0}"
     if args.output_file:
         case_name = args.output_file + "_" + case_name
 
@@ -197,10 +180,10 @@ def main():
         #     )
         end_time = time.time()
     else:
-        MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT = 100000
-        torch.cuda.memory._record_memory_history(
-            max_entries=MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT
-        )
+        # MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT = 100000
+        # torch.cuda.memory._record_memory_history(
+        #     max_entries=MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT
+        # )
         start_time = time.time()
         output = pipeline(
             prompt=args.prompt,

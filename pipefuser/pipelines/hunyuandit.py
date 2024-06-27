@@ -2,7 +2,7 @@
 # https://github.com/huggingface/diffusers/blob/v0.28.1/src/diffusers/pipelines/hunyuandit/pipeline_hunyuandit.py
 
 import torch
-from diffusers import PixArtAlphaPipeline,HunyuanDiTPipeline
+from diffusers import HunyuanDiTPipeline
 from diffusers.models.transformers.hunyuan_transformer_2d import HunyuanDiT2DModel
 from diffusers.pipelines.pixart_alpha.pipeline_pixart_alpha import (
     ASPECT_RATIO_1024_BIN,
@@ -10,14 +10,20 @@ from diffusers.pipelines.pixart_alpha.pipeline_pixart_alpha import (
     ASPECT_RATIO_256_BIN,
 )
 
-# from pipefuser.models.distri_sdxl_unet_tp import DistriSDXLUNetTP
-from pipefuser.pipelines.pip.distri_pixartalpha import DistriPixArtAlphaPiP
-from pipefuser.schedulers.pip.dpmsolver_multistep import DPMSolverMultistepSchedulerPiP
-
 from pipefuser.pipelines.pip.distri_hunyuandit import DistriHunyuanDiTPiP
-from pipefuser.schedulers.pip.ddpm import DDPMSchedulerPiP
-from diffusers import DDPMScheduler
-from pipefuser.models import NaivePatchDiT, DistriDiTPP, HunyuanDiTPiP, HunyuanDiTTP
+from pipefuser.schedulers.pip import (
+    DPMSolverMultistepSchedulerPiP,
+    DDIMSchedulerPiP,
+    FlowMatchEulerDiscreteSchedulerPiP,
+    DPMSolverMultistepSchedulerPiP,
+)
+from pipefuser.models import (
+    NaivePatchDiT,
+    DistriDiTPP,
+    DistriDiTSD3PipeFusion,
+    DistriDiTTP,
+    HunyuanDiTPipeFusion,
+)
 from pipefuser.utils import (
     DistriConfig,
     PatchParallelismCommManager,
@@ -36,7 +42,7 @@ class DistriHunyuanDiTPipeline:
         assert module_config.split_batch == False
 
         self.distri_config = module_config
-
+        
         self.static_inputs = None
 
         self.prepare()
@@ -45,7 +51,8 @@ class DistriHunyuanDiTPipeline:
     def from_pretrained(distri_config: DistriConfig, **kwargs):
         device = distri_config.device
         pretrained_model_name_or_path = kwargs.pop(
-            "pretrained_model_name_or_path", "Tencent-Hunyuan/HunyuanDiT"
+            "pretrained_model_name_or_path", 
+            "Tencent-Hunyuan/HunyuanDiT-Diffusers",
         )
         torch_dtype = kwargs.pop("torch_dtype", torch.float16)
         transformer = HunyuanDiT2DModel.from_pretrained(
@@ -53,22 +60,29 @@ class DistriHunyuanDiTPipeline:
             torch_dtype=torch_dtype,
             subfolder="transformer",
         )
-
-        if distri_config.parallelism == "patch":
+        
+        if (
+            distri_config.parallelism == "patch"
+            or distri_config.parallelism == "sequence"
+        ):
+            # raise ValueError("Patch parallelism is not supported for HunyuanDiT")
             transformer = DistriDiTPP(transformer, distri_config)
         elif distri_config.parallelism == "naive_patch":
-            transformer = NaivePatchDiT(transformer, distri_config)
-        elif distri_config.parallelism == "pipeline":
-            transformer = HunyuanDiTPiP(transformer, distri_config)
+            raise ValueError("Naive patch parallelism is not supported for HunyuanDiT")
+            # transformer = NaivePatchDiT(transformer, distri_config)
+        elif distri_config.parallelism == "pipefusion":
+            transformer = HunyuanDiTPipeFusion(transformer, distri_config)
         elif distri_config.parallelism == "tensor":
-            transformer = HunyuanDiTTP(transformer, distri_config)
+            raise ValueError("Tensor parallelism is not supported for HunyuanDiT")
+            # transformer = DistriDiTTP(transformer, distri_config)
         else:
             raise ValueError(f"Unknown parallelism: {distri_config.parallelism}")
+        
 
         peak_memory = torch.cuda.max_memory_allocated(device="cuda")
         print(f"DistriHunyuanDiTPipeline from pretrain stage 1 {peak_memory/1e9} GB")
 
-        if distri_config.parallelism == "pipeline":
+        if distri_config.parallelism == "pipefusion":
             if distri_config.scheduler == "ddpm-solver":
                 scheduler = DDPMSchedulerPiP.from_pretrained(
                     pretrained_model_name_or_path, subfolder="scheduler"
@@ -149,7 +163,7 @@ class DistriHunyuanDiTPipeline:
             self.pipeline(
                 height=distri_config.height,
                 width=distri_config.width,
-                prompt="",
+                prompt=prompt,
                 use_resolution_binning=distri_config.use_resolution_binning,
                 num_inference_steps=distri_config.warmup_steps + 2,
                 output_type="latent",

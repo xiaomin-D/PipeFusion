@@ -1,6 +1,5 @@
 # adpated from https://github.com/huggingface/diffusers/blob/v0.28.1/src/diffusers/pipelines/hunyuandit/pipeline_hunyuandit.py
 import torch
-
 from diffusers.pipelines.hunyuandit.pipeline_hunyuandit import (
     HunyuanDiTPipeline,
     STANDARD_RATIO,
@@ -11,19 +10,7 @@ from diffusers.pipelines.hunyuandit.pipeline_hunyuandit import (
     rescale_noise_cfg,
 )
 from diffusers.models.embeddings import get_2d_rotary_pos_embed
-from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
-from diffusers.utils import (
-    is_torch_xla_available,
-    logging,
-    replace_example_docstring,
-)
-if is_torch_xla_available():
-    import torch_xla.core.xla_model as xm
-
-    XLA_AVAILABLE = True
-else:
-    XLA_AVAILABLE = False
-    
+from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback 
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
 from typing import List, Optional, Union, Tuple, Callable, Dict, Final
 from pipefuser.utils import DistriConfig, PipelineParallelismCommManager
@@ -45,27 +32,52 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
 
     def set_comm_manager(self, comm_manger: PipelineParallelismCommManager):
         self.comm_manager = comm_manger
-
-    def scheduler_step(
+        
+    def pip_forward(
         self,
-        noise_pred: torch.FloatTensor,
-        latents: torch.FloatTensor,
-        t: Union[float, torch.Tensor],
-        extra_step_kwargs: Dict,
-        batch_idx: Union[int] = None,
+        hidden_states,
+        timestep,
+        timestep_expand_shape,
+        encoder_hidden_states=None,
+        text_embedding_mask=None,
+        encoder_hidden_states_t5=None,
+        text_embedding_mask_t5=None,
+        image_meta_size=None,
+        style=None,
+        image_rotary_emb=None,
+        return_dict=True,
     ):
+        distri_config = self.distri_config
 
-        # compute previous image: x_t -> x_t-1
-        latents = self.scheduler.step(
-            noise_pred,
-            t,
-            latents,
-            **extra_step_kwargs,
-            return_dict=False,
-            batch_idx=batch_idx,
-        )[0]
+        if distri_config.rank == 1:
+            # expand the latents if we are doing classifier free guidance
+            latents = torch.cat([hidden_states] * 2) if self.do_classifier_free_guidance else latents
 
-        return latents
+        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+        
+        # timestep = t.expand(latents.shape[0]) 
+        timestep = timestep.expand(timestep_expand_shape)
+
+        latents,encoder_hidden_states = self.transformer(
+                    latents,
+                    timestep=timestep,
+                    encoder_hidden_states=encoder_hidden_states,
+                    text_embedding_mask=text_embedding_mask,
+                    encoder_hidden_states_t5=encoder_hidden_states_t5,
+                    text_embedding_mask_t5=text_embedding_mask_t5,
+                    image_meta_size=image_meta_size,
+                    style=style,
+                    image_rotary_emb=image_rotary_emb,
+                    return_dict=return_dict,
+                )[0]
+
+        if distri_config.rank == 0:
+            # perform guidance
+            if self.do_classifier_free_guidance:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        return noise_pred, encoder_hidden_states
 
     def __call__(
         self,
@@ -264,12 +276,14 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask_2,
             max_sequence_length=256,
             text_encoder_index=1,
+            
         )
-
+        
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
-
+        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        
         # 5. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
         latents = self.prepare_latents(
@@ -326,9 +340,17 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
         dtype = latents.dtype
         pp_num_patch = distri_config.pp_num_patch
         
+        timestep_expand_shape = latents.shape[0] * 2 if self.do_classifier_free_guidance else latents.shape[0]        
+        
         assert self.comm_manager.recv_queue == []
         
-        self._num_timesteps = len(timesteps)
+        assert distri_config.warmup_steps >= 1
+        
+        if distri_config.rank == 1:
+            encoder_hidden_states = prompt_embeds
+        else:
+            encoder_hidden_states = None
+            
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             if distri_config.mode != "full_sync":
                 warmup_timesteps = timesteps[: distri_config.warmup_steps + 1]
@@ -336,7 +358,7 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
             else:
                 warmup_timesteps = timesteps
                 pip_timesteps = None
-            # 首先是warmup。
+
             for i, t in enumerate(warmup_timesteps):
                 if distri_config.rank == 0:
                     ori_latents = latents
@@ -346,11 +368,15 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
                 else:
                     self.comm_manager.irecv_from_prev(dtype)
                     latents = self.comm_manager.get_data()
+                    if i == 0:
+                        encoder_hidden_states = self.comm_manager.recv_from_prev(prompt_embeds.dtype, is_extra=True)
                 t = t.unsqueeze(0).to(dtype=torch.float16)
-                latents = self.transformer(
+                assert self._interrupt == False
+                latents, next_encoder_hidden_states = self.pip_forward(
                     latents,
-                    timestep=t,
-                    encoder_hidden_states=prompt_embeds,
+                    t,
+                    timestep_expand_shape = timestep_expand_shape,
+                    encoder_hidden_states=encoder_hidden_states,
                     text_embedding_mask=prompt_attention_mask,
                     encoder_hidden_states_t5=prompt_embeds_2,
                     text_embedding_mask_t5=prompt_attention_mask_2,
@@ -358,25 +384,29 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
                     style=style,
                     image_rotary_emb=image_rotary_emb,
                     return_dict=False,
-                )[0]
-
+                )
 
                 if distri_config.rank == 0:
-                    latents = self.scheduler_step(
+                    latents_dtype = latents.dtype
+                    latents = self.scheduler.step(
                         latents,
                         ori_latents,
                         t,
                         extra_step_kwargs,
                     )
+                    if latents.dtype != latents_dtype:
+                        if torch.backends.mps.is_available():
+                            # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
+                            latents = latents.to(latents_dtype)
 
-                if i == len(timesteps) - 1 or (
-                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                ):
+                # call the callback, if provided
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
 
                 self.comm_manager.isend_to_next(latents)
+                if distri_config.rank != 0 and i == 0:
+                    self.comm_manager.send_to_next(next_encoder_hidden_states, is_extra=True)
             assert self.comm_manager.recv_queue == []
-            
             if distri_config.rank == 1:
                 self.comm_manager.irecv_from_prev(dtype)
                 latents = self.comm_manager.get_data()
@@ -385,12 +415,11 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
                         self.comm_manager.irecv_from_prev(idx=batch_idx)
                 _, _, c, _ = latents.shape
                 latents = list(latents.split(c // pp_num_patch, dim=2))
-
+            
             else:
                 for _ in range(len(pip_timesteps)):
                     for batch_idx in range(pp_num_patch):
                         self.comm_manager.irecv_from_prev(idx=batch_idx)
-                # 创建对应latents大小。各自要处理
                 if distri_config.rank == 0:
                     _, _, c, _ = latents.shape
                     c //= pp_num_patch
@@ -401,76 +430,77 @@ class DistriHunyuanDiTPiP(HunyuanDiTPipeline):
                     ori_latents = [None for _ in range(pp_num_patch)]
                 else:
                     latents = [None for _ in range(pp_num_patch)]
-            
-            # 接下来是剩余部分，pip。
+
             for i, t in enumerate(pip_timesteps):
+
+                assert self.interrupt == False
+
+                if distri_config.rank != 1:
+                    encoder_hidden_states = self.comm_manager.recv_from_prev(prompt_embeds.dtype, is_extra=True)
+
                 for batch_idx in range(pp_num_patch):
 
                     if distri_config.rank == 0:
                         ori_latents[batch_idx] = latents[batch_idx]
-
+                    
                     if distri_config.rank == 1 and i == 0:
                         pass
                     else:
                         latents[batch_idx] = self.comm_manager.get_data(idx=batch_idx)
-                        
-                latents[batch_idx] = self.transformer(
-                    latents[batch_idx],
-                    t,
-                    encoder_hidden_states=prompt_embeds,
-                    text_embedding_mask=prompt_attention_mask,
-                    encoder_hidden_states_t5=prompt_embeds_2,
-                    text_embedding_mask_t5=prompt_attention_mask_2,
-                    image_meta_size=add_time_ids,
-                    style=style,
-                    image_rotary_emb=image_rotary_emb,
-                    return_dict=False,
-                )[0]
-
-                if distri_config.rank == 0:
-                    latents[batch_idx] = self.scheduler_step(
+                    latents[batch_idx], next_encoder_hidden_states = self.pip_forward(
                         latents[batch_idx],
-                        ori_latents[batch_idx],
                         t,
-                        extra_step_kwargs,
-                        batch_idx,
+                        timestep_expand_shape = timestep_expand_shape,
+                        encoder_hidden_states=encoder_hidden_states,
+                        text_embedding_mask=prompt_attention_mask,
+                        encoder_hidden_states_t5=prompt_embeds_2,
+                        text_embedding_mask_t5=prompt_attention_mask_2,
+                        image_meta_size=add_time_ids,
+                        style=style,
+                        image_rotary_emb=image_rotary_emb,
+                        return_dict=False,
                     )
-                    # self.comm_manager.irecv_from_prev(idx=batch_idx)
-                    if i != len(pip_timesteps) - 1:
+
+                    if distri_config.rank == 0:
+                        # compute the previous noisy sample x_t -> x_t-1
+                        latents_dtype = latents[batch_idx].dtype
+                        latents[batch_idx] = self.scheduler.step(latents[batch_idx], t, ori_latents[batch_idx], return_dict=False, batch_idx=batch_idx)[0]
+
+                        if latents[batch_idx].dtype != latents_dtype:
+                            if torch.backends.mps.is_available():
+                                # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
+                                latents[batch_idx] = latents[batch_idx].to(latents_dtype)
+                        if i != len(pip_timesteps) - 1:
+                            self.comm_manager.isend_to_next(latents[batch_idx])
+                        
+                    else:
                         self.comm_manager.isend_to_next(latents[batch_idx])
 
-                else:
-                    self.comm_manager.isend_to_next(latents[batch_idx])
+                    if distri_config.rank != 0 and batch_idx == 0:
+                        self.comm_manager.send_to_next(next_encoder_hidden_states, is_extra=True)
+
                 i += len(warmup_timesteps)
-                if i == len(timesteps) - 1 or (
-                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                ):
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
 
             if distri_config.rank == 0:
                 latents = torch.cat(latents, dim=2)
             else:
                 return None
-            
-        
-        if not output_type == "latent":
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
-        else:
+
+        if output_type == "latent":
             image = latents
-            has_nsfw_concept = None
 
-        if has_nsfw_concept is None:
-            do_denormalize = [True] * image.shape[0]
         else:
-            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
+            latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
 
-        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+            image = self.vae.decode(latents, return_dict=False)[0]
+            image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image, has_nsfw_concept)
+            return (image,)
 
-        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
+        return StableDiffusionPipelineOutput(images=image)

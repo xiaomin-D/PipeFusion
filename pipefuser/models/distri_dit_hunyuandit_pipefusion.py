@@ -8,9 +8,8 @@ from torch import distributed as dist, nn
 import torch
 
 from pipefuser.modules.base_module import BaseModule
-from pipefuser.modules.pip import (
-    DistriSelfAttentionPiP,
-    DistriTransformer2DModel,
+from pipefuser.modules.dit.pipefusion import (
+    DistriJointAttnPiP,
     DistriHunyuanDiT2DModel,
     DistriConv2dPiP,
     DistriPatchEmbed,
@@ -25,7 +24,7 @@ logger = init_logger(__name__)
 from typing import Optional, Dict, Any
 
 
-class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
+class HunyuanDiTPipeFusion(BaseModel):  # for Pipeline Parallelism
     def __init__(self, model: HunyuanDiT2DModel, distri_config: DistriConfig):
         assert isinstance(model, HunyuanDiT2DModel)
         model = DistriHunyuanDiT2DModel(model, distri_config)
@@ -46,14 +45,14 @@ class HunyuanDiTPiP(BaseModel):  # for Pipeline Parallelism
                     setattr(module, subname, wrapped_submodule)
                 elif isinstance(submodule, Attention):
                     if subname == "attn1":  # self attention
-                        wrapped_submodule = DistriSelfAttentionPiP(
+                        wrapped_submodule = DistriJointAttnPiP(
                             submodule, distri_config
                         )
                         setattr(module, subname, wrapped_submodule)
         logger.info(
             f"Using pipeline parallelism, world_size: {distri_config.world_size} and n_device_per_batch: {distri_config.n_device_per_batch}"
         )
-        super(HunyuanDiTPiP, self).__init__(model, distri_config)
+        super(HunyuanDiTPipeFusion, self).__init__(model, distri_config)
 
         self.batch_idx = 0
 

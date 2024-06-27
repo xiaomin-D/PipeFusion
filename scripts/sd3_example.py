@@ -115,7 +115,7 @@ def main():
         "-s",
         default="FM-ED",
         type=str,
-        choices=["dpm-solver", "ddim", "FM-ED"],
+        choices=["dpm-solver", "ddim", "EDFM-"],
         help="Scheduler to use.",
     )
 
